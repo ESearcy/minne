@@ -23,6 +23,8 @@ defmodule Minne do
   @behaviour Plug.Parsers
   require Logger
 
+  import Plug.Conn
+
   alias __MODULE__
 
   @impl Plug.Parsers
@@ -115,6 +117,7 @@ defmodule Minne do
         {conn, limit, [{name, %{headers: headers, body: body}} | acc]}
 
       {:file, name, upload} ->
+        upload = upload |> Map.put(:request_url, conn.request_path)
         upload = apply(upload.adapter.__struct__, :start, [upload, opts[:adapter_opts]])
 
         {:ok, limit, conn, upload} =
@@ -151,32 +154,51 @@ defmodule Minne do
   defp parse_multipart_file({:more, tail, conn}, limit, opts, upload) do
     chunk_size = byte_size(tail)
 
-    upload =
-      apply(upload.adapter.__struct__, :write_part, [
-        upload,
-        tail,
-        chunk_size,
-        opts[:adapter_opts]
-      ])
+    case apply(upload.adapter.__struct__, :write_part, [
+           upload,
+           tail,
+           chunk_size,
+           opts[:adapter_opts]
+         ]) do
+      {:ok, upload} ->
+        Plug.Conn.read_part_body(conn, opts)
+        |> parse_multipart_file(limit - chunk_size, opts, upload)
+
+      {:error, error} ->
+        Logger.error("error")
+
+        conn
+        |> put_resp_content_type("application/json")
+        |> put_status(:unprocessable_entity)
+        |> send_resp("error", Jason.encode!(error))
+        |> halt()
+    end
 
     # keep reading.
-    Plug.Conn.read_part_body(conn, opts)
-    |> parse_multipart_file(limit - chunk_size, opts, upload)
   end
 
   defp parse_multipart_file({:ok, tail, conn}, limit, opts, upload)
        when byte_size(tail) <= limit do
     chunk_size = byte_size(tail)
 
-    upload =
-      apply(upload.adapter.__struct__, :write_part, [
-        upload,
-        tail,
-        chunk_size,
-        opts[:adapter_opts]
-      ])
+    case apply(upload.adapter.__struct__, :write_part, [
+           upload,
+           tail,
+           chunk_size,
+           opts[:adapter_opts]
+         ]) do
+      {:ok, upload} ->
+        {:ok, limit - chunk_size, conn, upload}
 
-    {:ok, limit - chunk_size, conn, upload}
+      {:error, error} ->
+        Logger.error("error")
+
+        conn
+        |> put_resp_content_type("application/json")
+        |> put_status(:unprocessable_entity)
+        |> send_resp("error", Jason.encode!(error))
+        |> halt()
+    end
   end
 
   defp parse_multipart_file({:ok, tail, conn}, limit, _opts, upload) do

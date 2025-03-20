@@ -10,13 +10,15 @@ defmodule Minne.Upload do
           filename: String.t(),
           content_type: String.t(),
           size: non_neg_integer(),
-          adapter: map() | atom() | nil
+          adapter: map() | atom() | nil,
+          request_url: String.t() | nil
         }
 
   defstruct filename: "",
             content_type: "",
             size: 0,
-            adapter: nil
+            adapter: nil,
+            request_url: nil
 
   def new(adapter) do
     %__MODULE__{adapter: adapter}

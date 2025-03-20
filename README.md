@@ -32,7 +32,7 @@ plug(Plug.Parsers,
     {
       Minne,
       adapter: Minne.Adapter.S3
-      adapter_opts: [bucket: "some-bucket", upload_prefix: "upload"],
+      adapter_opts: [bucket: "some-bucket", upload_prefix: "upload", length: 1337],
     },
     :urlencoded,
     :json
