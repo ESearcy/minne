@@ -56,8 +56,8 @@ defmodule Minne.Adapter.S3 do
     }
   end
 
-  def write_part(%{} = upload, chunk, size, _opts) do
-    upload |> set_upload_id() |> upload_part(size, chunk)
+  def write_part(%{} = upload, chunk, size, final?, _opts) do
+    upload |> set_upload_id() |> upload_part(size, chunk, final?)
   end
 
   @impl Minne.Adapter
@@ -107,7 +107,8 @@ defmodule Minne.Adapter.S3 do
     :crypto.strong_rand_bytes(64) |> Base.url_encode64() |> binary_part(0, 32)
   end
 
-  defp upload_part(%{size: 0} = uploaded, size, chunk) do
+  # first uploaded chunk, track its size
+  defp upload_part(%{size: 0} = uploaded, size, chunk, false) do
     parts_count = uploaded.adapter.parts_count + 1
 
     new_part_async = upload_async(uploaded, parts_count, chunk)
@@ -125,21 +126,70 @@ defmodule Minne.Adapter.S3 do
   end
 
   # all subsuquent uploads need to be the same size, except the last chunk.
-  defp upload_part(%{chunk_size: chunk_size, remainder_bytes: remainder} = uploaded, size, chunk) do
+  defp upload_part(
+         %{chunk_size: chunk_size, remainder_bytes: remainder} = uploaded,
+         size,
+         chunk,
+         false
+       ) do
     chunk = remainder <> chunk
-    {chunk_to_process, remaining} = extract_chunk(chunk, chunk_size)
-    size = byte_size(chunk_to_process)
+
+    upload =
+      case extract_chunk(chunk, chunk_size) do
+        {nil, remaining} ->
+          uploaded
+
+        {chunk_to_process, remaining} ->
+          size = byte_size(chunk_to_process)
+          parts_count = uploaded.adapter.parts_count + 1
+
+          IO.inspect("chunk size: #{size}")
+          IO.inspect("total size #{(size + uploaded.size) / 1_048_576} MB")
+          IO.inspect("parts_count #{parts_count}")
+
+          new_part_async = upload_async(uploaded, parts_count, chunk_to_process)
+
+          %{
+            uploaded
+            | size: size + uploaded.size,
+              remainder_bytes: remaining,
+              adapter: %{
+                uploaded.adapter
+                | parts_count: parts_count,
+                  parts: [new_part_async | uploaded.adapter.parts]
+              }
+          }
+
+          # ensure no more then 1 chunk worth of data is left in remaining
+      end
+
+    if byte_size(upload.remainder_bytes) >= chunk_size do
+      upload_part(upload, size, "", false)
+    else
+      upload
+    end
+  end
+
+  # ensure final remaining bytes are uploaded
+  defp upload_part(
+         %{chunk_size: chunk_size} = uploaded,
+         size,
+         remaining_bytes,
+         true
+       ) do
+    size = byte_size(remaining_bytes)
     parts_count = uploaded.adapter.parts_count + 1
 
-    IO.inspect("size: #{size}")
+    IO.inspect("chunk size: #{size}")
+    IO.inspect("total size #{(size + uploaded.size) / 1_048_576} MB")
     IO.inspect("parts_count #{parts_count}")
 
-    new_part_async = upload_async(uploaded, parts_count, chunk_to_process)
+    new_part_async = upload_async(uploaded, parts_count, remaining_bytes)
 
-    %{
+    upload = %{
       uploaded
       | size: size + uploaded.size,
-        remainder_bytes: remaining,
+        remainder_bytes: "",
         adapter: %{
           uploaded.adapter
           | parts_count: parts_count,
