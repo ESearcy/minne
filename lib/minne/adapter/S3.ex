@@ -1,4 +1,5 @@
 defmodule Minne.Adapter.S3 do
+  require Logger
   alias Minne.Upload
   @behaviour Minne.Adapter
 
@@ -33,8 +34,7 @@ defmodule Minne.Adapter.S3 do
       upload
       | adapter: %{
           upload.adapter
-          | key: gen_key(opts),
-            bucket: opts[:bucket],
+          | bucket: opts[:bucket],
             hashes: %{
               sha256: :crypto.hash_init(:sha256),
               sha: :crypto.hash_init(:sha),
@@ -46,8 +46,41 @@ defmodule Minne.Adapter.S3 do
 
   @impl Minne.Adapter
   def start(upload, _opts) do
-    upload
+    IO.inspect(upload.adapter, label: :url_start)
+    adapter = %{upload.adapter | key: gen_timestamp_uuid_key(upload.request_url)}
+    %{upload | adapter: adapter}
   end
+
+  defp gen_timestamp_uuid_key(path) do
+    segments = String.split(path, "/", trim: true)
+
+    folder =
+      cond do
+        "upload" in segments ->
+          "bytes"
+
+        "kind" in segments ->
+          Enum.at(segments, 5)
+
+        "escalation" in segments ->
+          "escalation"
+
+        "files" in segments ->
+          "bytes"
+
+        true ->
+          error = "Invalid Kind provided when uploading to #{path}"
+          Logger.error(error)
+          raise RuntimeError, error
+      end
+
+    now = NaiveDateTime.utc_now()
+
+    folder <> "/#{now.year}/#{pad(now.month)}/#{pad(now.day)}/#{pad(now.hour)}/" <> UUID.uuid4()
+  end
+
+  defp pad(value) when value < 10, do: "0#{value}"
+  defp pad(value), do: Integer.to_string(value)
 
   @impl Minne.Adapter
   def write_part(
@@ -58,6 +91,7 @@ defmodule Minne.Adapter.S3 do
         _opts
       )
       when size < @min_chunk and parts_count == 0 do
+    IO.inspect(upload.request_url, label: :url)
     IO.inspect("hit small file upload")
 
     ExAws.S3.put_object(upload.adapter.bucket, upload.adapter.key, chunk,
@@ -75,6 +109,7 @@ defmodule Minne.Adapter.S3 do
   end
 
   def write_part(%{adapter: adapter} = upload, chunk, size, final?, _opts) do
+    IO.inspect(upload.request_url, label: :url)
     IO.inspect("hit big file upload")
     upload |> set_upload_id() |> upload_part(size, chunk, final?)
   end

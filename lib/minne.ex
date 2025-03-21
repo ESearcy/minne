@@ -117,6 +117,7 @@ defmodule Minne do
         {conn, limit, [{name, %{headers: headers, body: body}} | acc]}
 
       {:file, name, upload} ->
+        upload = %{upload | request_url: conn.request_path}
         upload = apply(upload.adapter.__struct__, :start, [upload, opts[:adapter_opts]])
 
         {:ok, limit, conn, upload} =
