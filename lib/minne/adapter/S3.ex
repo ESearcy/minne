@@ -107,14 +107,15 @@ defmodule Minne.Adapter.S3 do
     :crypto.strong_rand_bytes(64) |> Base.url_encode64() |> binary_part(0, 32)
   end
 
-  defp upload_part(%{} = uploaded, size, body) do
+  defp upload_part(%{size: 0} = uploaded, size, chunk) do
     parts_count = uploaded.adapter.parts_count + 1
 
-    new_part_async = upload_async(uploaded, parts_count, body)
+    new_part_async = upload_async(uploaded, parts_count, chunk)
 
     %{
       uploaded
       | size: size + uploaded.size,
+        chunk_size: size,
         adapter: %{
           uploaded.adapter
           | parts_count: parts_count,
@@ -123,8 +124,42 @@ defmodule Minne.Adapter.S3 do
     }
   end
 
+  # all subsuquent uploads need to be the same size, except the last chunk.
+  defp upload_part(%{chunk_size: chunk_size, remainder_bytes: remainder} = uploaded, size, chunk) do
+    chunk = remainder <> chunk
+    {chunk_to_process, remaining} = extract_chunk(chunk, chunk_size)
+    size = byte_size(chunk_to_process)
+    parts_count = uploaded.adapter.parts_count + 1
+
+    IO.inspect("size: #{size}")
+    IO.inspect("parts_count #{parts_count}")
+
+    new_part_async = upload_async(uploaded, parts_count, chunk_to_process)
+
+    %{
+      uploaded
+      | size: size + uploaded.size,
+        remainder_bytes: remaining,
+        adapter: %{
+          uploaded.adapter
+          | parts_count: parts_count,
+            parts: [new_part_async | uploaded.adapter.parts]
+        }
+    }
+  end
+
+  defp extract_chunk(data, size) do
+    if byte_size(data) >= size do
+      <<chunk::binary-size(size), remainder::binary>> = data
+      {chunk, remainder}
+    else
+      # Not enough data to form a full chunk yet
+      {<<>>, data}
+    end
+  end
+
   # launches async task to upload this part.
-  defp upload_async(uploaded, parts_count, body) do
+  defp upload_async(uploaded, parts_count, chunk) do
     Task.async(fn ->
       %{headers: headers} =
         ExAws.S3.upload_part(
@@ -132,7 +167,7 @@ defmodule Minne.Adapter.S3 do
           uploaded.adapter.key,
           uploaded.adapter.upload_id,
           parts_count,
-          body
+          chunk
         )
         |> ExAws.request!()
 

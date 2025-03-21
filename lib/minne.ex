@@ -52,10 +52,12 @@ defmodule Minne do
     rescue
       # Do not ignore upload errors
       e in [Plug.UploadError, Plug.Parsers.BadEncodingError] ->
+        IO.inspect(e)
         reraise e, __STACKTRACE__
 
       # All others are wrapped
       e ->
+        IO.inspect(e)
         reraise Plug.Parsers.ParseError.exception(exception: e), __STACKTRACE__
     end
   end
@@ -172,6 +174,19 @@ defmodule Minne do
       apply(upload.adapter.__struct__, :write_part, [
         upload,
         tail,
+        chunk_size,
+        opts[:adapter_opts]
+      ])
+
+    # now write the final leftover chunk before finishing.
+    remainder_bytes = upload.remainder_bytes
+    upload = %{upload | remainder_bytes: ""}
+    chunk_size = byte_size(remainder_bytes)
+
+    upload =
+      apply(upload.adapter.__struct__, :write_part, [
+        upload,
+        remainder_bytes,
         chunk_size,
         opts[:adapter_opts]
       ])
