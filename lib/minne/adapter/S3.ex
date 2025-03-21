@@ -45,7 +45,14 @@ defmodule Minne.Adapter.S3 do
         _opts
       )
       when size < @min_chunk and parts_count == 0 do
-    ExAws.S3.put_object(upload.adapter.bucket, upload.adapter.key, chunk,
+    IO.inspect(adapter, label: :one)
+
+    adapter =
+      adapter
+      |> update_adapter_hashes(chunk)
+      |> set_upload_key(url)
+
+    ExAws.S3.put_object(upload.adapter.bucket, adapter.key, chunk,
       content_disposition: "attachment; filename=\"#{upload.filename}\""
     )
     |> ExAws.request!()
@@ -54,11 +61,84 @@ defmodule Minne.Adapter.S3 do
       upload
       | size: size + upload.size
     }
+
+    # else
+    #   Logger.error("aborting 1")
+
+    #   {:error,
+    #    "File too large for this api. (max: #{adapter.max_file_size}) please use /api/v3/files/upload instead"}
+    # end
   end
 
-  def write_part(%{} = upload, chunk, size, final?, _opts) do
-    upload |> set_upload_id() |> upload_part(size, chunk, final?)
+  def write_part(%{adapter: adapter, request_url: url} = upload, chunk, size, _opts) do
+    IO.inspect(adapter, label: :two)
+    # if upload.size + size <= adapter.max_file_size do
+    adapter =
+      adapter
+      |> update_adapter_hashes(chunk)
+      |> set_upload_key(url)
+
+    upload = upload |> set_upload_id() |> upload_part(size, chunk)
+    %{upload | adapter: adapter}
+    # else
+    #   Logger.error("aborting 2")
+
+    #   ExAws.S3.abort_multipart_upload(adapter.bucket, adapter.key, upload.upload_id)
+    #   |> ExAws.request()
+
+    #   {:error,
+    #    "File too large for this api. (max: #{adapter.max_file_size} bytes) please use /api/v3/files/upload instead"}
+    # end
   end
+
+  defp update_adapter_hashes(
+         %{
+           hashes: %{
+             md5: md5,
+             sha256: sha256,
+             sha: sha
+           }
+         } = adapter,
+         new_chunk
+       ) do
+    new_sha256 = :crypto.hash_update(sha256, new_chunk)
+    new_sha = :crypto.hash_update(sha, new_chunk)
+    new_md5 = :crypto.hash_update(md5, new_chunk)
+    %{adapter | hashes: %{sha256: new_sha256, sha: new_sha, md5: new_md5}}
+  end
+
+  defp set_upload_key(adaptor, url) do
+    segments = String.split(url, "/", trim: true)
+
+    folder =
+      cond do
+        "upload" in segments ->
+          "bytes"
+
+        "kind" in segments ->
+          Enum.at(segments, 5)
+
+        "escalation" in segments ->
+          "escalation"
+
+        "files" in segments ->
+          "bytes"
+
+        true ->
+          Logger.error("unable to identify upload type #{url}")
+      end
+
+    now = NaiveDateTime.utc_now()
+
+    key =
+      folder <>
+        "/#{now.year}/#{pad(now.month)}/#{pad(now.day)}/#{pad(now.hour)}/" <> UUID.uuid4()
+
+    %{adaptor | key: key}
+  end
+
+  defp pad(value) when value < 10, do: "0#{value}"
+  defp pad(value), do: Integer.to_string(value)
 
   @impl Minne.Adapter
   def close(%{adapter: %{upload_id: nil}} = upload, _opts) do
