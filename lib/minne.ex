@@ -180,21 +180,26 @@ defmodule Minne do
         opts[:adapter_opts]
       ])
 
-    # now write the final leftover chunk before finishing.
+    # now write the final leftover chunk before finishing. if there are any.
     remainder_bytes = upload.remainder_bytes
-    upload = %{upload | remainder_bytes: ""}
-    chunk_size = byte_size(remainder_bytes)
 
-    upload =
-      apply(upload.adapter.__struct__, :write_part, [
-        upload,
-        remainder_bytes,
-        chunk_size,
-        true,
-        opts[:adapter_opts]
-      ])
+    if remainder_bytes == "" do
+      {:ok, limit - chunk_size, conn, upload}
+    else
+      upload = %{upload | remainder_bytes: ""}
+      chunk_size = byte_size(remainder_bytes)
 
-    {:ok, limit - chunk_size, conn, upload}
+      upload =
+        apply(upload.adapter.__struct__, :write_part, [
+          upload,
+          remainder_bytes,
+          chunk_size,
+          true,
+          opts[:adapter_opts]
+        ])
+
+      {:ok, limit - chunk_size, conn, upload}
+    end
   end
 
   defp parse_multipart_file({:ok, tail, conn}, limit, _opts, upload) do

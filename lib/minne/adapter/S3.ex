@@ -2,6 +2,7 @@ defmodule Minne.Adapter.S3 do
   alias Minne.Upload
   @behaviour Minne.Adapter
 
+  # @min_chunk 800
   @min_chunk 5_242_880
 
   @type t() :: %__MODULE__{
@@ -9,14 +10,16 @@ defmodule Minne.Adapter.S3 do
           bucket: String.t(),
           parts: list(),
           parts_count: non_neg_integer(),
-          upload_id: String.t() | nil
+          upload_id: String.t() | nil,
+          hashes: map()
         }
 
   defstruct key: "",
             bucket: "",
             parts: [],
             parts_count: 0,
-            upload_id: nil
+            upload_id: nil,
+            hashes: %{}
 
   @impl Minne.Adapter
   def default_opts() do
@@ -28,7 +31,16 @@ defmodule Minne.Adapter.S3 do
   def init(upload, opts) do
     %{
       upload
-      | adapter: %{upload.adapter | key: gen_key(opts), bucket: opts[:bucket]}
+      | adapter: %{
+          upload.adapter
+          | key: gen_key(opts),
+            bucket: opts[:bucket],
+            hashes: %{
+              sha256: :crypto.hash_init(:sha256),
+              sha: :crypto.hash_init(:sha),
+              md5: :crypto.hash_init(:md5)
+            }
+        }
     }
   end
 
@@ -39,25 +51,31 @@ defmodule Minne.Adapter.S3 do
 
   @impl Minne.Adapter
   def write_part(
-        %{adapter: %__MODULE__{parts_count: parts_count}} = upload,
+        %{adapter: %__MODULE__{parts_count: parts_count} = adapter} = upload,
         chunk,
         size,
         final?,
         _opts
       )
       when size < @min_chunk and parts_count == 0 do
+    IO.inspect("hit small file upload")
+
     ExAws.S3.put_object(upload.adapter.bucket, upload.adapter.key, chunk,
       content_disposition: "attachment; filename=\"#{upload.filename}\""
     )
     |> ExAws.request!()
 
+    adapter = adapter |> update_hashes(chunk) |> finalize_hashes()
+
     %{
       upload
-      | size: size + upload.size
+      | size: size + upload.size,
+        adapter: adapter
     }
   end
 
-  def write_part(%{} = upload, chunk, size, final?, _opts) do
+  def write_part(%{adapter: adapter} = upload, chunk, size, final?, _opts) do
+    IO.inspect("hit big file upload")
     upload |> set_upload_id() |> upload_part(size, chunk, final?)
   end
 
@@ -108,37 +126,38 @@ defmodule Minne.Adapter.S3 do
     :crypto.strong_rand_bytes(64) |> Base.url_encode64() |> binary_part(0, 32)
   end
 
-  # first uploaded chunk, track its size
-  defp upload_part(%{size: 0} = uploaded, size, chunk, false) do
+  # this represents the first chunk.
+  # since its always a jacked up size, we batch the first chunk with the second.
+  defp upload_part(%{chunk_size: 0} = uploaded, size, chunk, false) do
     parts_count = uploaded.adapter.parts_count + 1
 
-    new_part_async = upload_async(uploaded, parts_count, chunk)
-
-    %{
+    upload = %{
       uploaded
-      | size: size + uploaded.size,
-        chunk_size: size,
-        adapter: %{
-          uploaded.adapter
-          | parts_count: parts_count,
-            parts: [new_part_async | uploaded.adapter.parts]
-        }
+      | chunk_size: @min_chunk
     }
+
+    # this moves the chunk to the "remaining" flow to be picked up by the 2ed chunk and so on.
+    upload_part(upload, size, chunk, false)
   end
 
-  # all subsuquent uploads need to be the same size, except the last chunk.
+  # all upload chunks need to be the same size, except the last chunk.
   defp upload_part(
-         %{chunk_size: chunk_size, remainder_bytes: remainder} = uploaded,
+         %{chunk_size: chunk_size, remainder_bytes: remainder, adapter: adapter} = uploaded,
          size,
          chunk,
          false
        ) do
     chunk = remainder <> chunk
 
+    IO.inspect("2 target chunk size #{chunk_size}")
+
     upload =
       case extract_chunk(chunk, chunk_size) do
-        {nil, remaining} ->
-          uploaded
+        {<<>>, remaining} ->
+          %{
+            uploaded
+            | remainder_bytes: remaining
+          }
 
         {chunk_to_process, remaining} ->
           size = byte_size(chunk_to_process)
@@ -149,13 +168,14 @@ defmodule Minne.Adapter.S3 do
           IO.inspect("parts_count #{parts_count}")
 
           new_part_async = upload_async(uploaded, parts_count, chunk_to_process)
+          adapter = adapter |> update_hashes(chunk_to_process)
 
           %{
             uploaded
             | size: size + uploaded.size,
               remainder_bytes: remaining,
               adapter: %{
-                uploaded.adapter
+                adapter
                 | parts_count: parts_count,
                   parts: [new_part_async | uploaded.adapter.parts]
               }
@@ -173,7 +193,7 @@ defmodule Minne.Adapter.S3 do
 
   # ensure final remaining bytes are uploaded
   defp upload_part(
-         %{chunk_size: chunk_size} = uploaded,
+         %{chunk_size: chunk_size, adapter: adapter} = uploaded,
          size,
          remaining_bytes,
          true
@@ -186,27 +206,18 @@ defmodule Minne.Adapter.S3 do
     IO.inspect("parts_count #{parts_count}")
 
     new_part_async = upload_async(uploaded, parts_count, remaining_bytes)
+    adapter = adapter |> update_hashes(remaining_bytes) |> finalize_hashes() |> IO.inspect()
 
     upload = %{
       uploaded
       | size: size + uploaded.size,
         remainder_bytes: "",
         adapter: %{
-          uploaded.adapter
+          adapter
           | parts_count: parts_count,
             parts: [new_part_async | uploaded.adapter.parts]
         }
     }
-  end
-
-  defp extract_chunk(data, size) do
-    if byte_size(data) >= size do
-      <<chunk::binary-size(size), remainder::binary>> = data
-      {chunk, remainder}
-    else
-      # Not enough data to form a full chunk yet
-      {<<>>, data}
-    end
   end
 
   defp extract_chunk(data, size) do
@@ -234,5 +245,27 @@ defmodule Minne.Adapter.S3 do
 
       {parts_count, Minne.get_header(headers, "ETag")}
     end)
+  end
+
+  defp update_hashes(%{hashes: %{sha256: sha256, md5: md5, sha: sha}} = adapter, chunk) do
+    IO.inspect("adding to hash: #{to_string(chunk)}")
+
+    hashes = %{
+      sha256: :crypto.hash_update(sha256, chunk),
+      sha: :crypto.hash_update(sha, chunk),
+      md5: :crypto.hash_update(md5, chunk)
+    }
+
+    %{adapter | hashes: hashes}
+  end
+
+  defp finalize_hashes(%{hashes: %{sha256: sha256, md5: md5, sha: sha}} = adapter) do
+    hashes = %{
+      sha256: :crypto.hash_final(sha256) |> Base.encode16(case: :lower),
+      sha: :crypto.hash_final(sha) |> Base.encode16(case: :lower),
+      md5: :crypto.hash_final(md5) |> Base.encode16(case: :lower)
+    }
+
+    %{adapter | hashes: hashes}
   end
 end
