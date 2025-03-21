@@ -12,7 +12,8 @@ defmodule Minne.Adapter.S3 do
           parts: list(),
           parts_count: non_neg_integer(),
           upload_id: String.t() | nil,
-          hashes: map()
+          hashes: map(),
+          max_file_size: non_neg_integer()
         }
 
   defstruct key: "",
@@ -20,7 +21,8 @@ defmodule Minne.Adapter.S3 do
             parts: [],
             parts_count: 0,
             upload_id: nil,
-            hashes: %{}
+            hashes: %{},
+            max_file_size: 0
 
   @impl Minne.Adapter
   def default_opts() do
@@ -35,6 +37,7 @@ defmodule Minne.Adapter.S3 do
       | adapter: %{
           upload.adapter
           | bucket: opts[:bucket],
+            max_file_size: opts[:max_file_size],
             hashes: %{
               sha256: :crypto.hash_init(:sha256),
               sha: :crypto.hash_init(:sha),
@@ -91,9 +94,6 @@ defmodule Minne.Adapter.S3 do
         _opts
       )
       when size < @min_chunk and parts_count == 0 do
-    IO.inspect(upload.request_url, label: :url)
-    IO.inspect("hit small file upload")
-
     ExAws.S3.put_object(upload.adapter.bucket, upload.adapter.key, chunk,
       content_disposition: "attachment; filename=\"#{upload.filename}\""
     )
@@ -101,17 +101,21 @@ defmodule Minne.Adapter.S3 do
 
     adapter = adapter |> update_hashes(chunk) |> finalize_hashes()
 
-    %{
-      upload
-      | size: size + upload.size,
-        adapter: adapter
-    }
+    {:ok,
+     %{
+       upload
+       | size: size + upload.size,
+         adapter: adapter
+     }}
   end
 
-  def write_part(%{adapter: adapter} = upload, chunk, size, final?, _opts) do
-    IO.inspect(upload.request_url, label: :url)
-    IO.inspect("hit big file upload")
-    upload |> set_upload_id() |> upload_part(size, chunk, final?)
+  def write_part(%{adapter: %{max_file_size: max}} = upload, chunk, size, final?, _opts) do
+    if upload.size + size <= max do
+      upload = upload |> set_upload_id() |> upload_part(size, chunk, final?)
+      {:ok, upload}
+    else
+      {:error, "this api only supports files up to (#{max} bytes)"}
+    end
   end
 
   @impl Minne.Adapter
@@ -184,8 +188,6 @@ defmodule Minne.Adapter.S3 do
        ) do
     chunk = remainder <> chunk
 
-    IO.inspect("2 target chunk size #{chunk_size}")
-
     upload =
       case extract_chunk(chunk, chunk_size) do
         {<<>>, remaining} ->
@@ -197,10 +199,6 @@ defmodule Minne.Adapter.S3 do
         {chunk_to_process, remaining} ->
           size = byte_size(chunk_to_process)
           parts_count = uploaded.adapter.parts_count + 1
-
-          IO.inspect("chunk size: #{size}")
-          IO.inspect("total size #{(size + uploaded.size) / 1_048_576} MB")
-          IO.inspect("parts_count #{parts_count}")
 
           new_part_async = upload_async(uploaded, parts_count, chunk_to_process)
           adapter = adapter |> update_hashes(chunk_to_process)
@@ -235,10 +233,6 @@ defmodule Minne.Adapter.S3 do
        ) do
     size = byte_size(remaining_bytes)
     parts_count = uploaded.adapter.parts_count + 1
-
-    IO.inspect("chunk size: #{size}")
-    IO.inspect("total size #{(size + uploaded.size) / 1_048_576} MB")
-    IO.inspect("parts_count #{parts_count}")
 
     new_part_async = upload_async(uploaded, parts_count, remaining_bytes)
     adapter = adapter |> update_hashes(remaining_bytes) |> finalize_hashes() |> IO.inspect()
