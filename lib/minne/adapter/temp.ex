@@ -29,7 +29,7 @@ defmodule Minne.Adapter.Temp do
   end
 
   @impl Minne.Adapter
-  def write_part(upload, chunk, size, _opts) do
+  def write_part(upload, chunk, size, _, _opts) do
     binwrite!(upload.adapter.file, chunk)
 
     %{upload | size: upload.size + size}

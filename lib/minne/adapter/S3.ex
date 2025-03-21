@@ -87,10 +87,10 @@ defmodule Minne.Adapter.S3 do
 
   @impl Minne.Adapter
   def write_part(
-        %{adapter: %__MODULE__{parts_count: parts_count} = adapter} = upload,
+        %Upload{adapter: %__MODULE__{parts_count: parts_count} = adapter} = upload,
         chunk,
         size,
-        final?,
+        _final?,
         _opts
       )
       when size < @min_chunk and parts_count == 0 do
@@ -109,7 +109,13 @@ defmodule Minne.Adapter.S3 do
      }}
   end
 
-  def write_part(%{adapter: %{max_file_size: max}} = upload, chunk, size, final?, _opts) do
+  def write_part(
+        %Upload{adapter: %{max_file_size: max}} = upload,
+        chunk,
+        size,
+        final?,
+        _opts
+      ) do
     if upload.size + size <= max do
       upload = upload |> set_upload_id() |> upload_part(size, chunk, final?)
       {:ok, upload}
@@ -154,22 +160,9 @@ defmodule Minne.Adapter.S3 do
 
   defp set_upload_id(%{adapter: %{upload_id: _upload_id}} = uploaded), do: uploaded
 
-  defp gen_key(opts) do
-    prefix = Keyword.get(opts, :upload_prefix, "upload")
-    key_generator = Keyword.get(opts, :key_generator, &default_key_generator/0)
-
-    Path.join([prefix, key_generator.()])
-  end
-
-  defp default_key_generator() do
-    :crypto.strong_rand_bytes(64) |> Base.url_encode64() |> binary_part(0, 32)
-  end
-
   # this represents the first chunk.
   # since its always a jacked up size, we batch the first chunk with the second.
   defp upload_part(%{chunk_size: 0} = uploaded, size, chunk, false) do
-    parts_count = uploaded.adapter.parts_count + 1
-
     upload = %{
       uploaded
       | chunk_size: @min_chunk
@@ -226,8 +219,8 @@ defmodule Minne.Adapter.S3 do
 
   # ensure final remaining bytes are uploaded
   defp upload_part(
-         %{chunk_size: chunk_size, adapter: adapter} = uploaded,
-         size,
+         %{adapter: adapter} = uploaded,
+         _size,
          remaining_bytes,
          true
        ) do
@@ -237,7 +230,7 @@ defmodule Minne.Adapter.S3 do
     new_part_async = upload_async(uploaded, parts_count, remaining_bytes)
     adapter = adapter |> update_hashes(remaining_bytes) |> finalize_hashes() |> IO.inspect()
 
-    upload = %{
+    %{
       uploaded
       | size: size + uploaded.size,
         remainder_bytes: "",

@@ -12,9 +12,9 @@ defmodule Minne.Adapter do
               Upload.t(),
               chunk :: binary(),
               size :: non_neg_integer(),
-              final :: boolean(),
+              final? :: boolean(),
               opts
             ) ::
-              Upload.t()
+              Upload.t() | {:error, any()}
   @callback close(Upload.t(), opts) :: Upload.t()
 end

@@ -161,7 +161,6 @@ defmodule Minne do
            false,
            opts[:adapter_opts]
          ]) do
-      # keep reading.
       {:ok, upload} ->
         Plug.Conn.read_part_body(conn, opts)
         |> parse_multipart_file(limit - chunk_size, opts, upload)
@@ -172,11 +171,12 @@ defmodule Minne do
   end
 
   # {:ok, tail, conn} means this is the last chunk, so we need to make sure to
-  # finish processing any remaining bytes
+  # finish processing any remainder_bytes
   defp parse_multipart_file({:ok, tail, conn}, limit, opts, upload)
        when byte_size(tail) <= limit do
     chunk_size = byte_size(tail)
 
+    # process final chunk
     case apply(upload.adapter.__struct__, :write_part, [
            upload,
            tail,
@@ -187,6 +187,7 @@ defmodule Minne do
       {:ok, upload} ->
         remainder_bytes = upload.remainder_bytes
 
+        # process final remaining bytes
         if remainder_bytes == "" do
           {:ok, limit - chunk_size, conn, upload}
         else
