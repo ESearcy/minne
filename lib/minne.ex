@@ -158,6 +158,7 @@ defmodule Minne do
         upload,
         tail,
         chunk_size,
+        false,
         opts[:adapter_opts]
       ])
 
@@ -175,6 +176,7 @@ defmodule Minne do
         upload,
         tail,
         chunk_size,
+        false,
         opts[:adapter_opts]
       ])
 
@@ -188,6 +190,7 @@ defmodule Minne do
         upload,
         remainder_bytes,
         chunk_size,
+        true,
         opts[:adapter_opts]
       ])
 

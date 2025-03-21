@@ -8,7 +8,13 @@ defmodule Minne.Adapter do
   @callback default_opts() :: Keyword.t()
   @callback init(Upload.t(), opts) :: Upload.t()
   @callback start(Upload.t(), opts) :: Upload.t()
-  @callback write_part(Upload.t(), chunk :: binary(), size :: non_neg_integer(), opts) ::
+  @callback write_part(
+              Upload.t(),
+              chunk :: binary(),
+              size :: non_neg_integer(),
+              final :: boolean(),
+              opts
+            ) ::
               Upload.t()
   @callback close(Upload.t(), opts) :: Upload.t()
 end
