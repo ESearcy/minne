@@ -126,9 +126,9 @@ defmodule Minne do
 
             {conn, limit, [{name, upload} | acc]}
 
-          other ->
-            IO.inspect(other)
-            {other, limit, []}
+          # file limit hit or some other error has already been returned.
+          conn ->
+            {conn, limit, []}
         end
 
       :skip ->

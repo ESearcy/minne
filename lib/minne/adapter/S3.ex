@@ -3,7 +3,7 @@ defmodule Minne.Adapter.S3 do
   alias Minne.Upload
   @behaviour Minne.Adapter
 
-  # @min_chunk 800
+  # compile time is fine because these are not env vars
   @client Application.compile_env(:minne, :s3_client) || Minne.Clients.S3
   @min_chunk Application.compile_env(:minne, :chunk_size) || 5_242_880
 
