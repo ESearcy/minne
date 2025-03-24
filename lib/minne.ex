@@ -120,12 +120,16 @@ defmodule Minne do
         upload = %{upload | request_url: conn.request_path}
         upload = apply(upload.adapter.__struct__, :start, [upload, opts[:adapter_opts]])
 
-        {:ok, limit, conn, upload} =
-          parse_multipart_file(Plug.Conn.read_part_body(conn, opts), limit, opts, upload)
+        case parse_multipart_file(Plug.Conn.read_part_body(conn, opts), limit, opts, upload) do
+          {:ok, limit, conn, upload} ->
+            upload = apply(upload.adapter.__struct__, :close, [upload, opts[:adapter_opts]])
 
-        upload = apply(upload.adapter.__struct__, :close, [upload, opts[:adapter_opts]])
+            {conn, limit, [{name, upload} | acc]}
 
-        {conn, limit, [{name, upload} | acc]}
+          other ->
+            IO.inspect(other)
+            {other, limit, []}
+        end
 
       :skip ->
         {conn, limit, acc}
@@ -219,8 +223,7 @@ defmodule Minne do
 
   defp send_error(conn, error) do
     error_message = %{
-      error: "failed to upload file",
-      details: to_string(error),
+      error: to_string(error),
       status: "error"
     }
 

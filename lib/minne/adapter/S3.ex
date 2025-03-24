@@ -4,7 +4,8 @@ defmodule Minne.Adapter.S3 do
   @behaviour Minne.Adapter
 
   # @min_chunk 800
-  @min_chunk 5_242_880
+  @client Application.compile_env(:minne, :s3_client) || Minne.Clients.S3
+  @min_chunk Application.compile_env(:minne, :chunk_size) || 5_242_880
 
   @type t() :: %__MODULE__{
           key: String.t(),
@@ -49,7 +50,6 @@ defmodule Minne.Adapter.S3 do
 
   @impl Minne.Adapter
   def start(upload, _opts) do
-    IO.inspect(upload.adapter, label: :url_start)
     adapter = %{upload.adapter | key: gen_timestamp_uuid_key(upload.request_url)}
     %{upload | adapter: adapter}
   end
@@ -94,10 +94,7 @@ defmodule Minne.Adapter.S3 do
         _opts
       )
       when size < @min_chunk and parts_count == 0 do
-    ExAws.S3.put_object(upload.adapter.bucket, upload.adapter.key, chunk,
-      content_disposition: "attachment; filename=\"#{upload.filename}\""
-    )
-    |> ExAws.request!()
+    {:ok, _} = @client.put_object(upload.adapter.bucket, upload.adapter.key, chunk)
 
     adapter = adapter |> update_hashes(chunk) |> finalize_hashes()
 
@@ -120,8 +117,18 @@ defmodule Minne.Adapter.S3 do
       upload = upload |> set_upload_id() |> upload_part(size, chunk, final?)
       {:ok, upload}
     else
-      {:error, "this api only supports files up to (#{max} bytes)"}
+      abort_upload(upload)
+      {:error, "#{upload.request_url} only supports files smaller than (#{max / 1_048_576} MB)"}
     end
+  end
+
+  # upload didnt start yet, nothing to abort
+  defp abort_upload(%{adapter: %{parts: []}}) do
+    {:ok, %{}}
+  end
+
+  defp abort_upload(%{adapter: %{bucket: bucket, key: key, upload_id: upload_id}}) do
+    @client.abort_multipart_upload(bucket, key, upload_id)
   end
 
   @impl Minne.Adapter
@@ -137,23 +144,19 @@ defmodule Minne.Adapter.S3 do
       ) do
     reversed_parts = Enum.map(parts, &Task.await/1) |> Enum.reverse()
 
-    ExAws.S3.complete_multipart_upload(
+    @client.complete_multipart_upload(
       bucket,
       key,
       upload_id,
       reversed_parts
     )
-    |> ExAws.request!()
 
     %{upload | adapter: %{adapter | parts: reversed_parts}}
   end
 
   defp set_upload_id(%{adapter: %{upload_id: nil, bucket: bucket, key: key} = adapter} = uploaded) do
     %{body: %{upload_id: upload_id}} =
-      ExAws.S3.initiate_multipart_upload(bucket, key,
-        content_disposition: "attachment; filename=\"#{uploaded.filename}\""
-      )
-      |> ExAws.request!()
+      @client.initiate_multipart_upload(bucket, key)
 
     %{uploaded | adapter: %{adapter | upload_id: upload_id}}
   end
@@ -228,7 +231,7 @@ defmodule Minne.Adapter.S3 do
     parts_count = uploaded.adapter.parts_count + 1
 
     new_part_async = upload_async(uploaded, parts_count, remaining_bytes)
-    adapter = adapter |> update_hashes(remaining_bytes) |> finalize_hashes() |> IO.inspect()
+    adapter = adapter |> update_hashes(remaining_bytes) |> finalize_hashes()
 
     %{
       uploaded
@@ -256,22 +259,19 @@ defmodule Minne.Adapter.S3 do
   defp upload_async(uploaded, parts_count, chunk) do
     Task.async(fn ->
       %{headers: headers} =
-        ExAws.S3.upload_part(
+        @client.upload_part(
           uploaded.adapter.bucket,
           uploaded.adapter.key,
           uploaded.adapter.upload_id,
           parts_count,
           chunk
         )
-        |> ExAws.request!()
 
       {parts_count, Minne.get_header(headers, "ETag")}
     end)
   end
 
   defp update_hashes(%{hashes: %{sha256: sha256, md5: md5, sha: sha}} = adapter, chunk) do
-    IO.inspect("adding to hash: #{to_string(chunk)}")
-
     hashes = %{
       sha256: :crypto.hash_update(sha256, chunk),
       sha: :crypto.hash_update(sha, chunk),
