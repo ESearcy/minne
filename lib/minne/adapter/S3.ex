@@ -41,7 +41,7 @@ defmodule Minne.Adapter.S3 do
             max_file_size: opts[:max_file_size],
             hashes: %{
               sha256: :crypto.hash_init(:sha256),
-              sha: :crypto.hash_init(:sha),
+              sha1: :crypto.hash_init(:sha),
               md5: :crypto.hash_init(:md5)
             }
         }
@@ -94,7 +94,7 @@ defmodule Minne.Adapter.S3 do
         _opts
       )
       when size < @min_chunk and parts_count == 0 do
-    {:ok, _} = @client.put_object(upload.adapter.bucket, upload.adapter.key, chunk)
+    @client.put_object(upload.adapter.bucket, upload.adapter.key, chunk)
 
     adapter = adapter |> update_hashes(chunk) |> finalize_hashes()
 
@@ -114,6 +114,7 @@ defmodule Minne.Adapter.S3 do
         _opts
       ) do
     if upload.size + size <= max do
+      IO.inspect("hit max")
       upload = upload |> set_upload_id() |> upload_part(size, chunk, final?)
       {:ok, upload}
     else
@@ -124,7 +125,7 @@ defmodule Minne.Adapter.S3 do
 
   # upload didnt start yet, nothing to abort
   defp abort_upload(%{adapter: %{parts: []}}) do
-    {:ok, %{}}
+    %{}
   end
 
   defp abort_upload(%{adapter: %{bucket: bucket, key: key, upload_id: upload_id}}) do
@@ -142,7 +143,7 @@ defmodule Minne.Adapter.S3 do
         } = upload,
         _opts
       ) do
-    reversed_parts = Enum.map(parts, &Task.await/1) |> Enum.reverse()
+    reversed_parts = Enum.map(parts, fn p -> Task.await(p, 10000) end) |> Enum.reverse()
 
     @client.complete_multipart_upload(
       bucket,
@@ -271,20 +272,20 @@ defmodule Minne.Adapter.S3 do
     end)
   end
 
-  defp update_hashes(%{hashes: %{sha256: sha256, md5: md5, sha: sha}} = adapter, chunk) do
+  defp update_hashes(%{hashes: %{sha256: sha256, md5: md5, sha1: sha}} = adapter, chunk) do
     hashes = %{
       sha256: :crypto.hash_update(sha256, chunk),
-      sha: :crypto.hash_update(sha, chunk),
+      sha1: :crypto.hash_update(sha, chunk),
       md5: :crypto.hash_update(md5, chunk)
     }
 
     %{adapter | hashes: hashes}
   end
 
-  defp finalize_hashes(%{hashes: %{sha256: sha256, md5: md5, sha: sha}} = adapter) do
+  defp finalize_hashes(%{hashes: %{sha256: sha256, md5: md5, sha1: sha}} = adapter) do
     hashes = %{
       sha256: :crypto.hash_final(sha256) |> Base.encode16(case: :lower),
-      sha: :crypto.hash_final(sha) |> Base.encode16(case: :lower),
+      sha1: :crypto.hash_final(sha) |> Base.encode16(case: :lower),
       md5: :crypto.hash_final(md5) |> Base.encode16(case: :lower)
     }
 

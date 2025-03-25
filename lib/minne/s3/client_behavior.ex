@@ -6,19 +6,19 @@ defmodule Minne.Clients.S3Behaviour do
               bucket :: binary(),
               key :: binary(),
               body :: binary()
-            ) :: {:error, any()} | {:ok, map()}
+            ) :: map()
 
   @callback complete_multipart_upload(
               bucket :: binary(),
               key :: binary(),
               upload_id :: binary(),
               parts :: list()
-            ) :: {:error, any()} | {:ok, map()}
+            ) :: map()
 
   @callback initiate_multipart_upload(
               bucket :: binary(),
               key :: binary()
-            ) :: {:error, any()} | {:ok, map()}
+            ) :: map()
 
   @callback upload_part(
               bucket :: binary(),
@@ -26,11 +26,11 @@ defmodule Minne.Clients.S3Behaviour do
               upload_id :: binary(),
               part_number :: integer(),
               chunk :: binary()
-            ) :: {:error, any()} | {:ok, map()}
+            ) :: map()
 
   @callback abort_multipart_upload(
               bucket :: binary(),
               key :: binary(),
               upload_id :: binary()
-            ) :: {:error, any()} | {:ok, map()}
+            ) :: map()
 end

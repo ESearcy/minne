@@ -49,17 +49,17 @@ defmodule Minne do
   @impl Plug.Parsers
   def parse(conn, "multipart", subtype, _headers, opts_tuple)
       when subtype in ["form-data", "mixed"] do
-    try do
-      parse_multipart(conn, opts_tuple)
-    rescue
-      # Do not ignore upload errors
-      e in [Plug.UploadError, Plug.Parsers.BadEncodingError] ->
-        reraise e, __STACKTRACE__
+    # try do
+    parse_multipart(conn, opts_tuple)
+    # rescue
+    #   # Do not ignore upload errors
+    #   e in [Plug.UploadError, Plug.Parsers.BadEncodingError] ->
+    #     reraise e, __STACKTRACE__
 
-      # All others are wrapped
-      e ->
-        reraise Plug.Parsers.ParseError.exception(exception: e), __STACKTRACE__
-    end
+    #   # All others are wrapped
+    #   e ->
+    #     reraise Plug.Parsers.ParseError.exception(exception: e), __STACKTRACE__
+    # end
   end
 
   def parse(conn, _type, _subtype, _headers, _opts) do
